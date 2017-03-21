@@ -1,6 +1,6 @@
 ﻿<#
 	.SYNOPSIS
-		A brief description of the SetLunReservation.ps1 file.
+		Set a given LUN ID to Perennially Reserved.
 	
 	.DESCRIPTION
 		A description of the file.
@@ -84,8 +84,10 @@ for ($i = 1; $i -le $rDms.count; $i++)
 $selection = $menu.Item($ans)
 write-host("Choosed Disk: {0}" -f $selection)
 
+$current = 0
 foreach ($vmHost in $clusterHosts)
 {
+	Write-Progress -Activity "Processing Cluster." -CurrentOperation $vmHost.Name -PercentComplete (($counter / $clusterHosts.count) * 100)
 	$esxcli = Get-EsxCli -V2 -VMHost $vmHost
 	$deviceListArgs = $esxcli.storage.core.device.list.CreateArgs()
 	$deviceListArgs.device = $selection
@@ -93,7 +95,8 @@ foreach ($vmHost in $clusterHosts)
 	$deviceSetArgs = $esxcli.storage.core.device.setconfig.CreateArgs()
 	$deviceSetArgs.device = $selection
 	$deviceSetArgs.perenniallyreserved = $true
-	$esxcli.storage.core.device.setconfig.Invoke($deviceListArgs)
+	$esxcli.storage.core.device.setconfig.Invoke($deviceSetArgs)
+	$counter++
 }
 
 Disconnect-VIServer -WarningAction SilentlyContinue -Server $vCenter -Force -Confirm:$false
