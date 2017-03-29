@@ -8,6 +8,12 @@
 	.PARAMETER vCenter
 		vCenter Server
 	
+	.PARAMETER Username
+		Username for vCenter
+	
+	.PARAMETER Password
+		Password for vCenter
+	
 	.NOTES
 		===========================================================================
 		Created on:   	24/03/2017 09:05
@@ -24,143 +30,121 @@ param
 			   ValueFromPipeline = $true,
 			   Position = 1)]
 	[ValidateNotNullOrEmpty()]
-	[String]$vCenter
+	[String]$vCenter,
+	[Parameter(ValueFromPipeline = $true,
+			   Position = 2)]
+	[AllowNull()]
+	[String]$Username,
+	[Parameter(Position = 3)]
+	[AllowNull()]
+	[String]$Password
 )
 
-Import-Module -Name VMware.VimAutomation.Core -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Out-Null
-
-<#
-	.SYNOPSIS
-		A brief description of the GetHBAInformation function.
-	
-	.DESCRIPTION
-		Return HBA Information
-	
-	.PARAMETER esx
-		VMHost object
-	
-	.PARAMETER esxcliv2
-		Esxcli V2 Object
-	
-	.EXAMPLE
-		PS C:\> GetHBAInformation -esx $value1
-	
-	.NOTES
-		Additional information about the function.
-#>
-function GetHBAInformation
-{
-	[CmdletBinding(SupportsShouldProcess = $false)]
-	param
-	(
-		[Parameter(Mandatory = $true,
-				   ValueFromPipeline = $true,
-				   Position = 1)]
-		[ValidateNotNullOrEmpty()]
-		[VMware.VimAutomation.ViCore.Impl.V1.Inventory.VMHostImpl]$esx,
-		[Parameter(Mandatory = $true,
-				   ValueFromPipeline = $true,
-				   Position = 2,
-				   HelpMessage = 'Esxcli V2 Object')]
-		[ValidateNotNullOrEmpty()]
-		[System.Object]$esxcliv2
-	)
-	
-	Begin
-	{
-		
-	}
-	Process
-	{
-		$hostHba = Get-VMHostHBA -VMHost $esx -Type FibreChannel | Where-Object { $_.Status -eq "online" } |
-		Select-Object @{ N = "Datacenter"; E = { $datacenter.Name } },
-					  @{ N = "VMHost"; E = { $esx.Name } },
-					  @{ N = "HostName"; E = { $($_.VMHost | Get-VMHostNetwork).HostName } },
-					  @{ N = "version"; E = { $esx.version } },
-					  @{ N = "Manufacturer"; E = { $esx.Manufacturer } },
-					  @{ N = "Hostmodel"; E = { $esx.Model } },
-					  @{ Name = "SerialNumber"; Expression = { $esx.ExtensionData.Hardware.SystemInfo.OtherIdentifyingInfo | Where-Object { $_.IdentifierType.Key -eq "Servicetag" } | Select-Object -ExpandProperty IdentifierValue } },
-					  @{
-			N = "Cluster"; E = {
-				if ($esx.ExtensionData.Parent.Type -ne "ClusterComputeResource") { "Stand alone host" }
-				else
-				{
-					Get-view -Id $esx.ExtensionData.Parent | Select-Object -ExpandProperty Name
-				}
-			}
-		},
-					  Device, Model, Status,
-					  @{ N = "WWPN"; E = { ((("{0:X}" -f $_.NodeWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':') } },
-					  @{ N = "WWN"; E = { ((("{0:X}" -f $_.PortWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':') } },
-					  @{ N = "Fnicvendor"; E = { $esxcliv2.hardware.pci.list.Invoke() | Where-Object { $hba -contains $_.VMKernelName } | Select-Object -ExpandProperty VendorName } },
-					  @{ N = "enicdriver"; E = { $esxcliv2.system.module.get.Invoke(@{ module = "elxnet" }).version } },
-					  @{
-			N = "lpfcdriver"; E = {
-				$esxcliv2.system.module.get.Invoke(@{ module = "lpfc" }.version)
-			}
-		}
-		@{ N = "Enicvendor"; E = { $esxcliv2.hardware.pci.list.Invoke() | Where-Object { $nic -contains $_.VMKernelName } | Select-Object -ExpandProperty VendorName } }
-		return $hostHba
-	}
-	End
-	{
-		
-	}
-}
+Import-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue | Out-Null
 
 try
 {
-	$credential = Get-Credential -Message "Insert vCenter Username"
-	Connect-VIServer $vCenter -Credential $credential -WarningAction SilentlyContinue
+	if ([String]::IsNullOrEmpty($Username) -or [String]::IsNullOrEmpty($Password))
+	{
+		$vcCredential = Get-Credential
+		Connect-VIServer -Server $vCenter -Credential $vcCredential -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+	}
+	else
+	{
+		Connect-VIServer -Server $vCenter -User $Username -Password $Password -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+	}
 }
-catch [Exception] {
-	$exception = $_.Exception
-	Write-Error("Cannot connect to vCenter: {0} with error: {1}" -f ($vCenter, $exception.Message))
+catch
+{
+	Write-Error("Error connecting to vCenter: {0}" -f $vCenter)
+	exit
 }
 
-$report = New-Object System.Collections.ArrayList
-foreach ($datacenter in Get-Datacenter)
+class HostDeviceInformationList : System.Collections.ArrayList
 {
-	foreach ($esx in Get-VMHost -Location $datacenter)
+	HostDeviceInformationList() : base()
 	{
-		Write-Host("Processing: {0}" -f $esx.Name)
-		$esxcliv2 = Get-EsxCli -V2 -VMHost $esx
-		$nic = Get-VMHostNetworkAdapter -VMHost $esx | Select-Object -First 1 | Select-Object -ExpandProperty Name
-		$hba = Get-VMHostHBA -VMHost $esx -Type FibreChannel | Where-Object { $_.Status -eq "online" } | Select-Object -First 1 | Select-Object -ExpandProperty Name
-		$elem = Get-VMHostHBA -VMHost $esx -Type FibreChannel | Where-Object { $_.Status -eq "online" }
-		$resultObject = New-Object -TypeName 'System.Management.Automation.PSObject'
-		Add-Member -InputObject $resultObject -Name "Datacenter" -MemberType NoteProperty -Value $datacenter.Name
-		Add-Member -InputObject $resultObject -Name "VMHost" -MemberType NoteProperty -Value $esx.Name
-		Add-Member -InputObject $resultObject -Name "HostName" -MemberType NoteProperty -Value $($esx | Get-VMHostNetwork).HostName
-		Add-Member -InputObject $resultObject -Name "version" -MemberType NoteProperty -Value $esx.version
-		Add-Member -InputObject $resultObject -Name "Manufacturer" -MemberType NoteProperty -Value $esx.Manufacturer
-		Add-Member -InputObject $resultObject -Name "HostModel" -MemberType NoteProperty -Value $esx.Model
-		$serialNumber = $esx.ExtensionData.Hardware.SystemInfo.OtherIdentifyingInfo | Where-Object { $_.IdentifierType.Key -eq "Servicetag" } | Select-Object -ExpandProperty IdentifierValue
-		Add-Member -InputObject $resultObject -Name "SerialNumber" -MemberType NoteProperty -Value $serialNumber
-		if ($esx.ExtensionData.Parent.Type -ne "ClusterComputeResource")
-		{
-			$cluster = "Stand alone host"
-		}
-		else
-		{
-			$cluster = Get-view -Id $esx.ExtensionData.Parent | Select-Object -ExpandProperty Name
-		}
-		Add-Member -InputObject $resultObject -Name "Device" -MemberType NoteProperty -Value $_.Device
-		Add-Member -InputObject $resultObject -Name "Model" -MemberType NoteProperty -Value $_.Model
-		Add-Member -InputObject $resultObject -Name "Status" -MemberType NoteProperty -Value $_.Status
-		$wwpn = ((("{0:X}" -f $_.NodeWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':')
-		Add-Member -InputObject $resultObject -Name "WWPN" -MemberType NoteProperty -Value $wwpn
-		$wwn = ((("{0:X}" -f $_.PortWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':')
-		Add-Member -InputObject $resultObject -Name "WWN" -MemberType NoteProperty -Value $wwn
-		$fNicVendor = $esxcliv2.hardware.pci.list.Invoke() | Where-Object { $hba -contains $_.VMKernelName } | Select-Object -ExpandProperty VendorName
-		Add-Member -InputObject $resultObject -Name "Vendor" -MemberType NoteProperty -Value $fNicVendor
-		$elxNetDriver = $esxcliv2.system.module.get.Invoke(@{ module = "elxnet" }).version
-		Add-Member -InputObject $resultObject -Name "ElxnetDriver" -MemberType NoteProperty -Value $elxNetDriver
-		$LpfcDriver = $esxcliv2.system.module.get.Invoke(@{ module = "lpfc" }).version
-		Add-Member -InputObject $resultObject -Name "LpfcDriver" -MemberType NoteProperty -Value $LpfcDriver
-		$report.Add($resultObject)
+	}
+	
+	# This code will convert the hashtable object into an IDictionary implemented one, in order to be able
+	# to convert it into a csv.
+	ExportToCsv([String]$fileName)
+	{
+		$this | ForEach-Object {
+			new-object psobject -property $_
+		} | Export-Csv -Path "ciao.txt" -NoTypeInformation -UseCulture
 	}
 }
 
-$report | Export-Csv
+class HostDeviceInformation
+{
+	[System.Object]$esxCliV2
+	[PSObject]$VMHostViObj
+	[PSObject]$Hba
+	[PSObject]$Nic
+	[System.Collections.Hashtable]$Data
+	
+	# Constructor
+	HostDeviceInformation([PSObject]$VMHost)
+	{
+		$this.VMHostViObj = $VMHost
+		$this.esxCliV2 = Get-EsxCli -VMHost $this.VMHostViObj -V2
+		$this.Hba = Get-VMHostHba -VMHost $this.VMHostViObj -Type FibreChanne | Where-Object { $_.Status -eq "online" }
+		$this.Nic = Get-VMHostNetworkAdapter -VMHost $this.VMHostViObj
+		$this.Data = [System.Collections.Hashtable]::new()
+	}
+	
+	GetAllData()
+	{
+		foreach ($hba in $this.Hba)
+		{
+			if ($this.VMHostViObj.ExtensionData.Parent.Type -ne "ClusterComputeResource")
+			{
+				$this.Data['Cluster'] = "Standalone Host"
+			}
+			else
+			{
+				$this.Data['Cluster'] = Get-view -Id $this.VMHostViObj.ExtensionData.Parent | Select-Object -ExpandProperty Name
+			}
+			$this.Data['VMHost'] = $this.VMHostViObj.Name
+			$this.Data['HostName'] = ($this.VMHostViObj | Get-VMHostNetwork).Hostname
+			$this.Data['Version'] = $this.VMHostViObj.version
+			$this.Data['Manufacturer'] = $this.VMHostVIObj.Manufacturer
+			$this.Data['HostModel'] = $this.VMHostViObj.Model
+			$this.Data['SerialNumber'] = $this.VMHostViObj.ExtensionData.Hardware.SystemInfo.OtherIdentifyingInfo | Where-Object { $_.IdentifierType.Key -eq "Servicetag" } | Select-Object -ExpandProperty IdentifierValue
+			$this.Data['Device'] = $hba.Device
+			$this.Data['Model'] = $hba.Model
+			$this.Data['Status'] = $hba.Status
+			$this.Data['WWPN'] = ((("{0:X}" -f $hba.NodeWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':')
+			$this.Data['WWN'] = ((("{0:X}" -f $hba.PortWorldWideName).ToLower()) -replace "(\w{2})", '$1:').TrimEnd(':')
+			$this.Data['Fnicvendor'] = $this.esxCliV2.hardware.pci.list.Invoke() | Where-Object { $hba.Device -contains $_.VMKernelName } | Select-Object -ExpandProperty VendorName
+			$this.Data['fnicdriver'] = $this.esxCliV2.system.module.get.Invoke(@{ module = "lpfc" }).version
+			$this.Data['enicdriver'] = $this.esxCliV2.system.module.get.Invoke(@{ module = "elxnet" }).version
+			$this.Data['Enicvendor'] = $this.esxCliV2.hardware.pci.list.Invoke() | Where-Object { $nic.Device -contains $_.VMKernelName } | Select-Object -ExpandProperty VendorName
+		}
+		Write-Debug("Collecting Data for host: {0} completed." -f $this.VMHostViObj.Name)
+	}
+	
+	[System.Collections.Hashtable] GetHashtableObject()
+	{
+		return $this.Data
+	}
+}
+
+$report = [HostDeviceInformationList]::new()
+
+foreach ($esx in Get-Cluster -Name "WMOBE" | Get-VMHost)
+{
+	# Create a new instance of the object containing Hashtabled data
+	$hostDeviceInformation = [HostDeviceInformation]::new($esx)
+	$hostDeviceInformation.GetAllData()
+	$report.Add($hostDeviceInformation.GetHashTableObject())
+}
+
+$report.ExportToCsv("report.csv")
+
+Disconnect-VIServer -WarningAction SilentlyContinue -Server $vCenter -Force -Confirm:$false
+
+
+
 
