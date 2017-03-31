@@ -72,7 +72,7 @@ class HostDeviceInformationList : System.Collections.ArrayList
 	{
 		$this | ForEach-Object {
 			new-object psobject -property $_
-		} | Export-Csv -Path "ciao.txt" -NoTypeInformation -UseCulture
+		} | Export-Csv -Path $fileName -NoTypeInformation -UseCulture
 	}
 }
 
