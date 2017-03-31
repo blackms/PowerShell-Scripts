@@ -7,6 +7,12 @@
 	
 	.PARAMETER csvFile
 		String representing the full path of the file
+		The file must be structured like this:
+		-----------------------------
+		DatastoreName,Tag,TagCategory
+		DatastoreName,Tag,TagCategory
+		...
+		-----------------------------
 	
 	.NOTES
 		===========================================================================
