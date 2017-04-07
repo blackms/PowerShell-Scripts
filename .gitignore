@@ -1,0 +1,7 @@
+*.csv
+*.txt
+*.psproj
+*.psprojs
+*.psc1
+*.RestorePoint.*
+*.TempPoint.*
