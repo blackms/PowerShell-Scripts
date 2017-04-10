@@ -9,8 +9,9 @@
 		String representing the full path of the file
 		The file must be structured like this:
 		-----------------------------
-		DatastoreName,Tag,TagCategory
-		DatastoreName,Tag,TagCategory
+		Tag1,Tag2,Tag3,Tag4
+		IPv4-iSCSI-SiteA,Tag1,Tag3
+		IPv4-NFS-SiteA,Tag2,Tag4
 		...
 		-----------------------------
 	
@@ -89,6 +90,7 @@ class vcConnector : System.IDisposable
 			{
 				Connect-VIServer -Server $this.vCenter -User $this.Username -Password $this.Password -WarningAction SilentlyContinue -ErrorAction Stop
 			}
+			Write-Debug("Connected to vCenter: {0}" -f $this.vCenter)
 		}
 		catch
 		{
@@ -133,7 +135,7 @@ class Content{
 		{
 			# Cast the Get-Content return type to Generic List of Strings in order to avoid fixed-size array
 			$this.elements = [System.Collections.Generic.List[System.String]](Get-Content -Path $filePath -ea SilentlyContinue -wa SilentlyContinue)
-			$this.availableTags = $this.raw[0].split(',')
+			$this.availableTags = $this.elements[0].split(',')
 			# Delete the first element aka availableTags
 			$this.elements.RemoveAt(0)
 		}
@@ -146,33 +148,40 @@ class Content{
 
 try
 {
-	$vc = [vcConnector]::new().GetInstance()
+	$vc = [vcConnector]::new($Username, $Password, $vCenter)
 	$csvContent = [Content]::new($csvFile)
 	
+	Write-Host("Available Tags: {0}" -f ($csvContent.availableTags))
+
 	foreach ($element in $csvContent.elements)
 	{
+		[System.Collections.Generic.List[System.String]]$splittedList = $element.split(',')
 		# Get the Datastore Name
-		[System.String]$datastoreName = $element.split(',')[0]
+		[System.String]$datastoreName = $splittedList[0]
+		# Removing Datastore Name
+		$splittedList.RemoveAt(0)
 		# Create a List of Tags which will be assigned to the Datastore
-		[System.Collections.Generic.List[TagAssignment]]$tagsToAssign = $element.split(',')[1..$element.Lenght-1] | ForEach-Object { Get-TagAssignment -Server $_ }
+		[System.Collections.Generic.List[PSObject]]$tagsToAssign = $splittedList | ForEach-Object { Get-Tag -Name $_ }
+		Write-Host("Tags to assign to Datastore: {0} are: {1}" -f ($datastoreName, $tagsToAssign))
 		# Get Datastore object by the given Datastore Name, first field of the the line
 		$datastore = Get-Datastore -Name $datastoreName -ea Stop
 		# Iterate the assigned Datastore Tags
 		foreach ($tag in ($datastore | Get-TagAssignment))
 		{
 			# Check if the current tag is one of the available ones.
-			if ($tag -in $csvContent.availableTags)
+			if ($tag.Tag.Name -in $csvContent.availableTags)
 			{
 				# Remove the current assigned Tag
 				Write-Host("Removing Tag: {0}" -f ($tag))
+				Remove-TagAssignment -TagAssignment $tag -Confirm:$false
 			}
 		}
 		# Finally add the new set of tags to the Datastore
 		foreach ($tag in $tagsToAssign)
 		{
-			Write-Host("Trying to assign Tag: {0} to Datastore: {1}" -f ($tag, $datastoreName))
+			Write-Host("Trying to assign Tag: {0} to Datastore: {1}" -f ($tag.Name, $datastoreName))
 			# Assign the Tag
-			New-TagAssignment -Entity $datastore -Tag $tag -WhatIf
+			New-TagAssignment -Entity $datastore -Tag $tag
 		}		
 	}
 }
